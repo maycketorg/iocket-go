@@ -13,8 +13,8 @@ import (
 type IocketURL string
 
 const (
-	LOCAL IocketURL = "ws://localhost:8080/gateway"
-	URL   IocketURL = "wss://api.iocket.com/gateway"
+	LOCAL IocketURL = "localhost:8080"
+	URL   IocketURL = "api.iocket.com"
 
 	RAW       = "https://api.iocket.com"
 	RAW_LOCAL = "http://localhost:8080"
@@ -45,7 +45,14 @@ func (b *Bot) Set(url IocketURL) {
 
 func (b *Bot) Run() error {
 	P("Starting Bot")
-	c, _, err := websocket.DefaultDialer.Dial(string(b.route)+"?token="+b.token, nil)
+	
+	var i string
+	if b.route == LOCAL {
+		i = "ws://"
+	} else {
+		i = "wss://"
+	}
+	c, _, err := websocket.DefaultDialer.Dial(i + string(b.route) + "/gateway" +"?token="+b.token, nil)
 	if err != nil {
 		return err
 	}
