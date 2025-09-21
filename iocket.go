@@ -171,17 +171,22 @@ func (b *Bot) Send(m Message) error {
 	return nil
 }
 
-func (b *Bot) CreateTicket(ct CreateTicket) error {
+func (b *Bot) CreateTicket(ct CreateTicket) (*Ticket, error) {
 	r, err := b.POST(ct, CREATE_TICKET)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if r.StatusCode != 200 && r.StatusCode != 201 {
-		return errors.New("invalid to create ticket")
+		return nil, errors.New("invalid to create ticket")
 	}
-
-	return nil
+	defer r.Body.Close()
+	var t Ticket
+	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+		return nil, err
+	}
+	
+	return &t, nil
 }
 
 func (b *Bot) GetCategories() ([]Category, error) {

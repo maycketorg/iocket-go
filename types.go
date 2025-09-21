@@ -54,8 +54,10 @@ type ClaimTicket struct {
 }
 
 type Ticket struct {
-	ExternalID string `json:"external_id"`
-	CategoryID string `json:"category_id"`
+	ID         string    `json:"id,omitempty"`
+	ExternalID string    `json:"external_id,omitempty"`
+	Category   *Category `json:"category,omitempty"`
+	CategoryID string    `json:"category_id,omitempty"`
 }
 
 type TicketClient struct {
