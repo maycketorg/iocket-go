@@ -68,4 +68,3 @@ type TicketClose struct {
 	ExternalID       string `json:"external_id"`
 	ClientExternalID string `json:"client_external_id"`
 }
-

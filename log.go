@@ -15,7 +15,7 @@ const (
 	reset  = "\033[0m"
 )
 
-func perror(args ...any) {
+func Perror(args ...any) {
 	_, file, line, _ := runtime.Caller(1)
 	t := time.Now()
 	lineStr := strconv.Itoa(line)
@@ -23,7 +23,7 @@ func perror(args ...any) {
 	fmt.Println(append([]any{red+"[IOCKET]" + reset, t.Format(time.TimeOnly), file[i+1:]+":"+lineStr,"|"}, args...)...)
 }
 
-func pwarn(args ...any) {
+func Pwarn(args ...any) {
 	_, file, line, _ := runtime.Caller(1)
 	t := time.Now()
 	lineStr := strconv.Itoa(line)
@@ -32,7 +32,7 @@ func pwarn(args ...any) {
 
 }
 
-func p(args ...any) {
+func P(args ...any) {
 	_, file, line, _ := runtime.Caller(1)
 	t := time.Now()
 	lineStr := strconv.Itoa(line)

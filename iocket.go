@@ -10,38 +10,47 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type IocketURL string
+
 const (
-	LOCAL = "ws://localhost:8080/gateway"
-	URL   = "wss://api.iocket.com/gateway"
+	LOCAL IocketURL = "ws://localhost:8080/gateway"
+	URL   IocketURL = "wss://api.iocket.com/gateway"
 
 	RAW       = "https://api.iocket.com"
 	RAW_LOCAL = "http://localhost:8080"
 
-	MESSAGE       = "/ticket/message"
-	CREATE_TICKET = "/ticket"
+	MESSAGE        = "/ticket/message"
+	CREATE_TICKET  = "/bot/ticket"
+	GET_CATEGORIES = "/bot/categories"
 )
 
 type Bot struct {
 	token    string
 	Channel  Channel
 	handlers map[reflect.Type][]reflect.Value
+	route    IocketURL
 }
 
 func New(token string) *Bot {
 	return &Bot{
 		token:    token,
 		handlers: make(map[reflect.Type][]reflect.Value),
+		route:    URL,
 	}
 }
 
+func (b *Bot) Set(url IocketURL) {
+	b.route = url
+}
+
 func (b *Bot) Run() error {
-	p("Starting Bot")
-	c, _, err := websocket.DefaultDialer.Dial(LOCAL+"?token="+b.token, nil)
+	P("Starting Bot")
+	c, _, err := websocket.DefaultDialer.Dial(string(b.route)+"?token="+b.token, nil)
 	if err != nil {
 		return err
 	}
 
-	p("Getting channel informations")
+	P("Getting channel informations")
 
 	for {
 		if c == nil {
@@ -49,7 +58,7 @@ func (b *Bot) Run() error {
 		}
 		_, data, err := c.ReadMessage()
 		if err != nil {
-			perror(err)
+			Perror(err)
 			continue
 		}
 		var ch Channel
@@ -60,7 +69,7 @@ func (b *Bot) Run() error {
 		break
 	}
 
-	p("Hello", b.Channel.Name)
+	P("Hello", b.Channel.Name)
 
 	go func() {
 		for {
@@ -69,11 +78,11 @@ func (b *Bot) Run() error {
 			}
 			_, data, err := c.ReadMessage()
 			if err != nil {
-				perror(err)
+				Perror(err)
 				continue
 			}
 
-			p(string(data))
+			P(string(data))
 			b.trigger(data)
 		}
 	}()
@@ -85,12 +94,12 @@ func (b *Bot) Add(events ...interface{}) {
 	for _, event := range events {
 		v := reflect.TypeOf(event)
 		if v.Kind() != reflect.Func {
-			perror("is not possible add other type")
+			Perror("is not possible add other type")
 			return
 		}
 
 		if v.NumIn() != 2 {
-			perror("invalid handler")
+			Perror("invalid handler")
 			return
 		}
 
@@ -105,7 +114,7 @@ func (b *Bot) POST(m interface{}, ep string) (*http.Response, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", RAW_LOCAL+ep, bytes.NewReader(data))
+	req, err := http.NewRequest("POST", string(b.route)+ep, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +129,7 @@ func (b *Bot) POST(m interface{}, ep string) (*http.Response, error) {
 }
 
 func (b *Bot) GET(ep string) (*http.Response, error) {
-	req, err := http.NewRequest("GET", RAW_LOCAL, nil)
+	req, err := http.NewRequest("GET", string(b.route)+ep, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -160,6 +169,24 @@ func (b *Bot) CreateTicket(ct CreateTicket) error {
 	return nil
 }
 
+func (b *Bot) GetCategories() ([]Category, error) {
+	r, err := b.GET(GET_CATEGORIES)
+	if err != nil {
+		return nil, err
+	}
+
+	if r.StatusCode != 200 {
+		return nil, errors.New("error for get categories")
+	}
+	defer r.Body.Close()
+	var categories []Category
+	if err := json.NewDecoder(r.Body).Decode(&categories); err != nil {
+		return nil, err
+	}
+
+	return categories, nil
+}
+
 func (b *Bot) trigger(data []byte) error {
 	var p Payload
 	if err := json.Unmarshal(data, &p); err != nil {
@@ -187,9 +214,9 @@ func (b *Bot) trigger(data []byte) error {
 		}
 		m = tc
 	default:
-		pwarn("update this package")
+		Pwarn("update this package")
 	}
-	
+
 	mType := reflect.TypeOf(m)
 	for _, v := range b.handlers[mType] {
 		v.Call([]reflect.Value{
