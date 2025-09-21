@@ -46,11 +46,9 @@ func (b *Bot) Set(url IocketURL) {
 func (b *Bot) Run() error {
 	P("Starting Bot")
 	
-	var i string
+	i := "wss://"
 	if b.route == LOCAL {
 		i = "ws://"
-	} else {
-		i = "wss://"
 	}
 	c, _, err := websocket.DefaultDialer.Dial(i + string(b.route) + "/gateway" +"?token="+b.token, nil)
 	if err != nil {
@@ -120,8 +118,13 @@ func (b *Bot) POST(m interface{}, ep string) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
+	
+	i := "https://"
+	if b.route == LOCAL {
+		i = "http://"
+	}
 
-	req, err := http.NewRequest("POST", string(b.route)+ep, bytes.NewReader(data))
+	req, err := http.NewRequest("POST", i + string(b.route)+ep, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +139,12 @@ func (b *Bot) POST(m interface{}, ep string) (*http.Response, error) {
 }
 
 func (b *Bot) GET(ep string) (*http.Response, error) {
-	req, err := http.NewRequest("GET", string(b.route)+ep, nil)
+	i := "https://"
+	if b.route == LOCAL {
+		i = "http://"
+	}
+	
+	req, err := http.NewRequest("GET", i + string(b.route)+ep, nil)
 	if err != nil {
 		return nil, err
 	}
