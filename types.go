@@ -67,6 +67,8 @@ type TicketClient struct {
 }
 
 type TicketClose struct {
-	ExternalID       string `json:"external_id"`
-	ClientExternalID string `json:"client_external_id"`
+	ID           string        `json:"id"`
+	AgentName    string        `json:"agent_name"`
+	Ticket       *Ticket       `json:"ticket"`
+	TicketClient *TicketClient `json:"client"`
 }
