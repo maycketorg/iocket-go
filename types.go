@@ -7,20 +7,19 @@ type Payload struct {
 	M json.RawMessage `json:"m"`
 }
 
+type MessagePayload struct {
+	ID             string `json:"id"`                    // TicketID
+	Message        *Message        `json:"message"`               // Message
+	Status         bool            `json:"status,omitempty"`      // Status
+	ChatExternalID *string         `json:"external_id,omitempty"` // ChatID External
+}
+
 type Message struct {
-	ChatID    string `json:"chat_external_id"`
-	ClientID  string `json:"client_external_id"`
-	MessageID string `json:"message_external_id"`
-	Content   string `json:"content"`
+	ID        string `json:"id,omitempty"` // MessageID
+	From      string          `json:"from"`         // From Name
+	Timestamp int64           `json:"timestamp"`    // Timestamp
+	Content   string          `json:"content"`      // Content
 }
-
-type MessageCreate struct {
-	From      string `json:"from"`
-	Timestamp int64  `json:"timestamp"`
-	Content   string `json:"content"`
-	ChatID    string `json:"external_id"`
-}
-
 type CreateTicket struct {
 	CategoryID string               `json:"category_id"`
 	Name       string               `json:"name"`

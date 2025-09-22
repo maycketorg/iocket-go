@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -45,12 +46,12 @@ func (b *Bot) Set(url IocketURL) {
 
 func (b *Bot) Run() error {
 	P("Starting Bot")
-	
+
 	i := "wss://"
 	if b.route == LOCAL {
 		i = "ws://"
 	}
-	c, _, err := websocket.DefaultDialer.Dial(i + string(b.route) + "/gateway" +"?token="+b.token, nil)
+	c, _, err := websocket.DefaultDialer.Dial(i+string(b.route)+"/gateway"+"?token="+b.token, nil)
 	if err != nil {
 		return err
 	}
@@ -75,6 +76,8 @@ func (b *Bot) Run() error {
 	}
 
 	P("Hello", b.Channel.Name)
+	
+	go b.heartbeat(c)
 
 	go func() {
 		for {
@@ -93,6 +96,21 @@ func (b *Bot) Run() error {
 	}()
 
 	return nil
+}
+
+func (b *Bot) heartbeat(c *websocket.Conn) {
+	for {
+		time.Sleep(time.Second * 30)
+		if c == nil {
+			return
+		}
+		
+		c.WriteJSON(map[string]string{
+			"e": "HEARTBEAT",
+			"m": "ping",
+		})
+		P("Ping")
+	}
 }
 
 func (b *Bot) Add(events ...interface{}) {
@@ -118,13 +136,13 @@ func (b *Bot) POST(m interface{}, ep string) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	i := "https://"
 	if b.route == LOCAL {
 		i = "http://"
 	}
 
-	req, err := http.NewRequest("POST", i + string(b.route)+ep, bytes.NewReader(data))
+	req, err := http.NewRequest("POST", i+string(b.route)+ep, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
@@ -143,8 +161,8 @@ func (b *Bot) GET(ep string) (*http.Response, error) {
 	if b.route == LOCAL {
 		i = "http://"
 	}
-	
-	req, err := http.NewRequest("GET", i + string(b.route)+ep, nil)
+
+	req, err := http.NewRequest("GET", i+string(b.route)+ep, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +203,7 @@ func (b *Bot) CreateTicket(ct CreateTicket) (*Ticket, error) {
 	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
 		return nil, err
 	}
-	
+
 	return &t, nil
 }
 
@@ -216,7 +234,7 @@ func (b *Bot) trigger(data []byte) error {
 	var m interface{}
 	switch p.E {
 	case "MESSAGE_CREATE":
-		var mc MessageCreate
+		var mc MessagePayload
 		if err := json.Unmarshal(p.M, &mc); err != nil {
 			return err
 		}
@@ -233,6 +251,8 @@ func (b *Bot) trigger(data []byte) error {
 			return err
 		}
 		m = tc
+	case "HEARTBEAT":
+		return nil
 	default:
 		Pwarn("update this package")
 	}
