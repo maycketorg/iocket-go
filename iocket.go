@@ -23,6 +23,7 @@ const (
 	PROD                  IocketURL = "api.iocket.com"
 	endpointCreateTicket            = "/bot/ticket"
 	endpointGetCategories           = "/bot/categories"
+	endpointSendMessage             = "/ticket/message"
 )
 
 // Bot é a estrutura principal do cliente SDK.
@@ -171,6 +172,20 @@ func (b *Bot) heartbeat() {
 }
 
 // --- Métodos de API REST ---
+
+func (b *Bot) SendMessage(req MessageBotRequest) error {
+	resp, err := b.post(endpointSendMessage, req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		return b.newAPIError(resp)
+	}
+	b.logger.Info("Message sent successfully:", req.MessageExternalID)
+	return nil
+}
 
 func (b *Bot) CreateTicket(req CreateTicketRequest) (*Ticket, error) {
 	var ticket Ticket
