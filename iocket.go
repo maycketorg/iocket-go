@@ -3,267 +3,287 @@ package iocketsdk
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
+	"fmt"
+	"io"
 	"net/http"
-	"reflect"
+	"net/url"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
+//======================================================================
+// ESTRUTURA PRINCIPAL DO SDK
+//======================================================================
+
 type IocketURL string
 
 const (
-	LOCAL IocketURL = "localhost:8080"
-	URL   IocketURL = "api.iocket.com"
-
-	RAW       = "https://api.iocket.com"
-	RAW_LOCAL = "http://localhost:8080"
-
-	MESSAGE        = "/ticket/message"
-	CREATE_TICKET  = "/bot/ticket"
-	GET_CATEGORIES = "/bot/categories"
+	LOCAL                 IocketURL = "localhost:8080"
+	PROD                  IocketURL = "api.iocket.com"
+	endpointCreateTicket            = "/bot/ticket"
+	endpointGetCategories           = "/bot/categories"
 )
 
+// Bot é a estrutura principal do cliente SDK.
 type Bot struct {
-	token    string
-	Channel  Channel
-	handlers map[reflect.Type][]reflect.Value
-	route    IocketURL
+	token      string
+	baseURL    url.URL
+	httpClient *http.Client
+	conn       *websocket.Conn
+	logger     *Logger
+	ack        bool
+
+	// Handlers de evento com segurança de tipos.
+	OnConnect       func(b *Bot, channel *Channel)
+	OnMessageCreate func(b *Bot, event MessageCreateEvent)
+	OnTicketClaimed func(b *Bot, event TicketClaimedEvent)
+	OnTicketClosed  func(b *Bot, event TicketClosedEvent)
+	OnDisconnect    func(err error)
+
+	wsURL url.URL
 }
 
+// Channel é a estrutura recebida na conexão.
+type Channel struct {
+	ID   Nanoid `json:"id"`
+	Name string `json:"name"`
+}
+
+// New cria uma nova instância do Bot, já com o logger configurado.
 func New(token string) *Bot {
-	return &Bot{
-		token:    token,
-		handlers: make(map[reflect.Type][]reflect.Value),
-		route:    URL,
+	bot := &Bot{
+		token:      token,
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+		logger:     NewLogger(), // Logger integrado!
 	}
+	bot.SetEnvironment(PROD)
+	return bot
 }
 
-func (b *Bot) Set(url IocketURL) {
-	b.route = url
+// SetEnvironment configura o ambiente (LOCAL ou PROD).
+func (b *Bot) SetEnvironment(env IocketURL) {
+	schemeRest := "https"
+	if env == LOCAL {
+		schemeRest = "http"
+	}
+	b.baseURL = url.URL{Scheme: schemeRest, Host: string(env)}
 }
 
+// Run inicia a conexão WebSocket e o loop de escuta.
 func (b *Bot) Run() error {
-	P("Starting Bot")
-
-	i := "wss://"
-	if b.route == LOCAL {
-		i = "ws://"
+	wsURL := b.baseURL
+	wsURL.Scheme = "wss"
+	if b.baseURL.Scheme == "http" {
+		wsURL.Scheme = "ws"
 	}
-	c, _, err := websocket.DefaultDialer.Dial(i+string(b.route)+"/gateway"+"?token="+b.token, nil)
+	wsURL.Path = "/gateway"
+	wsURL.RawQuery = "token=" + b.token
+
+	b.logger.Info("Connecting to", wsURL.String())
+	b.wsURL = wsURL
+	c, _, err := websocket.DefaultDialer.Dial(wsURL.String(), nil)
 	if err != nil {
-		return err
+		b.logger.Error("Failed to connect:", err)
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+	b.conn = c
+
+	var channelInfo Channel
+	if err := c.ReadJSON(&channelInfo); err != nil {
+		b.logger.Error("Failed to read channel info:", err)
+		return fmt.Errorf("failed to read channel info: %w", err)
 	}
 
-	P("Getting channel informations")
+	if b.OnConnect != nil {
+		go b.OnConnect(b, &channelInfo)
+	}
 
+	b.logger.Info("Connected to channel:", channelInfo.Name)
+
+	go b.heartbeat()
+	go b.listen()
+
+	return nil
+}
+
+// listen é o loop principal que lê mensagens do WebSocket.
+func (b *Bot) listen() {
+	defer b.conn.Close()
 	for {
-		if c == nil {
-			return errors.New("conection is closed")
-		}
-		_, data, err := c.ReadMessage()
+		_, data, err := b.conn.ReadMessage()
 		if err != nil {
-			Perror(err)
-			continue
-		}
-		var ch Channel
-		if err := json.Unmarshal(data, &ch); err != nil {
-			return err
-		}
-		b.Channel = ch
-		break
-	}
-
-	P("Hello", b.Channel.Name)
-	
-	go b.heartbeat(c)
-
-	go func() {
-		for {
-			if c == nil {
+			b.logger.Error("Connection read error:", err)
+			if b.OnDisconnect != nil {
+				go b.OnDisconnect(err)
+			}
+			b.logger.Warn("Trying to reconnect")
+			if !b.reconnect() {
 				return
 			}
-			_, data, err := c.ReadMessage()
-			if err != nil {
-				Perror(err)
-				continue
-			}
-
-			P(string(data))
-			b.trigger(data)
 		}
-	}()
-
-	return nil
+		b.dispatch(data)
+	}
 }
 
-func (b *Bot) heartbeat(c *websocket.Conn) {
-	for {
-		time.Sleep(time.Second * 30)
-		if c == nil {
+func (b *Bot) reconnect() bool {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	times := 0
+	maxTimes := 30
+	for range ticker.C {
+		if times == maxTimes {
+			return false
+		}
+
+		times += 1
+		b.logger.Warn("Attempt", times)
+		c, _, err := websocket.DefaultDialer.Dial(b.wsURL.String(), nil)
+		if err != nil {
+			b.logger.Error("Error for reconnect:", err)
+			continue
+		}
+
+		b.conn = c
+		if !b.ack {
+			go b.heartbeat()
+		}
+		return true
+	}
+
+	return true
+}
+
+// heartbeat envia pings periódicos para manter a conexão ativa.
+func (b *Bot) heartbeat() {
+	b.ack = true
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		b.logger.Info("Ping")
+		if err := b.conn.WriteJSON(map[string]string{"e": "HEARTBEAT", "m": "ping"}); err != nil {
+			b.logger.Warn("Failed to send heartbeat:", err)
+			b.ack = false
 			return
 		}
-		
-		c.WriteJSON(map[string]string{
-			"e": "HEARTBEAT",
-			"m": "ping",
-		})
-		P("Ping")
 	}
 }
 
-func (b *Bot) Add(events ...interface{}) {
-	for _, event := range events {
-		v := reflect.TypeOf(event)
-		if v.Kind() != reflect.Func {
-			Perror("is not possible add other type")
-			return
-		}
+// --- Métodos de API REST ---
 
-		if v.NumIn() != 2 {
-			Perror("invalid handler")
-			return
-		}
-
-		param := v.In(1)
-		b.handlers[param] = append(b.handlers[param], reflect.ValueOf(event))
-	}
-}
-
-func (b *Bot) POST(m interface{}, ep string) (*http.Response, error) {
-	data, err := json.Marshal(m)
+func (b *Bot) CreateTicket(req CreateTicketRequest) (*Ticket, error) {
+	var ticket Ticket
+	resp, err := b.post(endpointCreateTicket, req)
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 
-	i := "https://"
-	if b.route == LOCAL {
-		i = "http://"
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return nil, b.newAPIError(resp)
 	}
 
-	req, err := http.NewRequest("POST", i+string(b.route)+ep, bytes.NewReader(data))
-	if err != nil {
-		return nil, err
+	if err := json.NewDecoder(resp.Body).Decode(&ticket); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
-	req.Header.Add("Authorization", "Bot "+b.token)
-	client := &http.Client{}
-	res, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	return res, nil
-}
-
-func (b *Bot) GET(ep string) (*http.Response, error) {
-	i := "https://"
-	if b.route == LOCAL {
-		i = "http://"
-	}
-
-	req, err := http.NewRequest("GET", i+string(b.route)+ep, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Add("Authorization", "Bot "+b.token)
-	client := &http.Client{}
-	res, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	return res, nil
-}
-
-func (b *Bot) Send(m Message) error {
-	r, err := b.POST(m, MESSAGE)
-	if err != nil {
-		return err
-	}
-
-	if r.StatusCode != 201 {
-		return errors.New("invalid message")
-	}
-
-	return nil
-}
-
-func (b *Bot) CreateTicket(ct CreateTicket) (*Ticket, error) {
-	r, err := b.POST(ct, CREATE_TICKET)
-	if err != nil {
-		return nil, err
-	}
-
-	if r.StatusCode != 200 && r.StatusCode != 201 {
-		return nil, errors.New("invalid to create ticket")
-	}
-	defer r.Body.Close()
-	var t Ticket
-	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
-		return nil, err
-	}
-
-	return &t, nil
+	return &ticket, nil
 }
 
 func (b *Bot) GetCategories() ([]Category, error) {
-	r, err := b.GET(GET_CATEGORIES)
+	var categories []Category
+	resp, err := b.get(endpointGetCategories)
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 
-	if r.StatusCode != 200 {
-		return nil, errors.New("error for get categories")
-	}
-	defer r.Body.Close()
-	var categories []Category
-	if err := json.NewDecoder(r.Body).Decode(&categories); err != nil {
-		return nil, err
+	if resp.StatusCode != http.StatusOK {
+		return nil, b.newAPIError(resp)
 	}
 
+	if err := json.NewDecoder(resp.Body).Decode(&categories); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
 	return categories, nil
 }
 
-func (b *Bot) trigger(data []byte) error {
+// --- Funções de Ajuda Internas ---
+
+func (b *Bot) post(endpoint string, payload interface{}) (*http.Response, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		b.logger.Error("Failed to marshal POST payload:", err)
+		return nil, err
+	}
+
+	url := b.baseURL.String() + endpoint
+	req, err := http.NewRequest("POST", url, bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bot "+b.token)
+
+	return b.httpClient.Do(req)
+}
+
+func (b *Bot) get(endpoint string) (*http.Response, error) {
+	url := b.baseURL.String() + endpoint
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bot "+b.token)
+
+	return b.httpClient.Do(req)
+}
+
+func (b *Bot) dispatch(data []byte) {
 	var p Payload
 	if err := json.Unmarshal(data, &p); err != nil {
-		return err
+		b.logger.Warn("Failed to unmarshal websocket payload:", err)
+		return
 	}
 
-	var m interface{}
-	switch p.E {
+	switch p.Event {
 	case "MESSAGE_CREATE":
-		var mc MessagePayload
-		if err := json.Unmarshal(p.M, &mc); err != nil {
-			return err
+		if b.OnMessageCreate != nil {
+			var event MessageCreateEvent
+			if err := json.Unmarshal(p.Data, &event); err == nil {
+				go b.OnMessageCreate(b, event)
+			} else {
+				b.logger.Warn("Failed to unmarshal MESSAGE_CREATE data:", err)
+			}
 		}
-		m = mc
-	case "CLAIM_TICKET":
-		var ct ClaimTicket
-		if err := json.Unmarshal(p.M, &ct); err != nil {
-			return err
+	case "TICKET_CLAIMED":
+		if b.OnTicketClaimed != nil {
+			var event TicketClaimedEvent
+			if err := json.Unmarshal(p.Data, &event); err == nil {
+				go b.OnTicketClaimed(b, event)
+			} else {
+				b.logger.Warn("Failed to unmarshal TICKET_CLAIMED data:", err)
+			}
 		}
-		m = ct
-	case "TICKET_CLOSE":
-		var tc TicketClose
-		if err := json.Unmarshal(p.M, &tc); err != nil {
-			return err
+	case "TICKET_CLOSED":
+		if b.OnTicketClosed != nil {
+			var event TicketClosedEvent
+			if err := json.Unmarshal(p.Data, &event); err == nil {
+				go b.OnTicketClosed(b, event)
+			} else {
+				b.logger.Warn("Failed to unmarshal TICKET_CLOSED data:", err)
+			}
 		}
-		m = tc
-	case "HEARTBEAT":
-		return nil
+	case "HEARTBEAT_ACK":
+		b.logger.Info("Pong")
 	default:
-		Pwarn("update this package")
+		b.logger.Warn("Received unknown event type:", p.Event)
 	}
+}
 
-	mType := reflect.TypeOf(m)
-	for _, v := range b.handlers[mType] {
-		v.Call([]reflect.Value{
-			reflect.ValueOf(b),
-			reflect.ValueOf(m),
-		})
-	}
-
-	return nil
+func (b *Bot) newAPIError(resp *http.Response) error {
+	body, _ := io.ReadAll(resp.Body)
+	err := fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(body))
+	b.logger.Error(err.Error()) // Loga o erro da API antes de retorná-lo.
+	return err
 }
