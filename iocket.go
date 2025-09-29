@@ -90,6 +90,11 @@ func (b *Bot) Run() error {
 	}
 	b.conn = c
 
+	c.SetPingHandler(func(appData string) error {
+		deadline := time.Now().Add(10 * time.Second)
+		return c.WriteControl(websocket.PongMessage, []byte(appData), deadline)
+	})
+
 	var channelInfo Channel
 	if err := c.ReadJSON(&channelInfo); err != nil {
 		b.logger.Error("Failed to read channel info:", err)
@@ -102,7 +107,6 @@ func (b *Bot) Run() error {
 
 	b.logger.Info("Connected to channel:", channelInfo.Name)
 
-	go b.heartbeat()
 	go b.listen()
 
 	return nil
@@ -119,55 +123,29 @@ func (b *Bot) listen() {
 				go b.OnDisconnect(err)
 			}
 			b.logger.Warn("Trying to reconnect")
-			if !b.reconnect() {
-				return
-			}
+			go b.reconnect()
+			return
 		}
 		b.dispatch(data)
 	}
 }
 
-func (b *Bot) reconnect() bool {
+func (b *Bot) reconnect() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	times := 0
 	maxTimes := 30
 	for range ticker.C {
 		if times == maxTimes {
-			return false
+			return
 		}
 
 		times += 1
 		b.logger.Warn("Attempt", times)
-		c, _, err := websocket.DefaultDialer.Dial(b.wsURL.String(), nil)
-		if err != nil {
-			b.logger.Error("Error for reconnect:", err)
+		if err := b.Run(); err != nil && maxTimes > times {
 			continue
 		}
-
-		b.conn = c
-		if !b.ack {
-			go b.heartbeat()
-		}
-		return true
-	}
-
-	return true
-}
-
-// heartbeat envia pings periódicos para manter a conexão ativa.
-func (b *Bot) heartbeat() {
-	b.ack = true
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		b.logger.Info("Ping")
-		if err := b.conn.WriteJSON(map[string]string{"e": "HEARTBEAT", "m": "ping"}); err != nil {
-			b.logger.Warn("Failed to send heartbeat:", err)
-			b.ack = false
-			return
-		}
+		return
 	}
 }
 
