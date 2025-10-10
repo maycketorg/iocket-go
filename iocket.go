@@ -92,7 +92,7 @@ func (b *Bot) Run() error {
 
 	c.SetPingHandler(func(appData string) error {
 		deadline := time.Now().Add(10 * time.Second)
-		return c.WriteControl(websocket.PongMessage, []byte(appData), deadline)
+		return c.WriteControl(websocket.PingMessage, []byte(appData), deadline)
 	})
 
 	var channelInfo Channel
