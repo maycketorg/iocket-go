@@ -24,6 +24,10 @@ const (
 	endpointCreateTicket            = "/bot/ticket"
 	endpointGetCategories           = "/bot/categories"
 	endpointSendMessage             = "/ticket/message"
+
+	pingInterval = 30 * time.Second
+	writeWait    = 10 * time.Second
+	pongWait     = 60 * time.Second
 )
 
 // Bot é a estrutura principal do cliente SDK.
@@ -92,7 +96,12 @@ func (b *Bot) Run() error {
 
 	c.SetPingHandler(func(appData string) error {
 		deadline := time.Now().Add(10 * time.Second)
-		return c.WriteControl(websocket.PingMessage, []byte(appData), deadline)
+		return c.WriteControl(websocket.PongMessage, []byte(appData), deadline)
+	})
+
+	c.SetPongHandler(func(appData string) error {
+		b.logger.Info("PONG recebido do servidor")
+		return nil
 	})
 
 	var channelInfo Channel
@@ -108,8 +117,26 @@ func (b *Bot) Run() error {
 	b.logger.Info("Connected to channel:", channelInfo.Name)
 
 	go b.listen()
+	go b.heartbeat()
 
 	return nil
+}
+
+func (b *Bot) heartbeat() {
+	ticker := time.NewTicker(pingInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		if b.conn == nil {
+			return
+		}
+		deadline := time.Now().Add(writeWait)
+		if err := b.conn.WriteControl(websocket.PingMessage, nil, deadline); err != nil {
+			b.logger.Warn("Falha ao enviar PING:", err)
+			go b.reconnect()
+			return
+		}
+		b.logger.Info("PING enviado para o servidor")
+	}
 }
 
 // listen é o loop principal que lê mensagens do WebSocket.
