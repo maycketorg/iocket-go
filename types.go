@@ -40,10 +40,23 @@ type CreateTicketPlatformRequest struct {
 
 // MessageBotRequest é a estrutura para enviar uma mensagem vinda de um bot.
 type MessageBotRequest struct {
-	ChatExternalID    string `json:"chat_external_id"`
-	ClientExternalID  string `json:"client_external_id"`
-	MessageExternalID string `json:"message_external_id"`
-	Content           string `json:"content"`
+	ChatExternalID    string  `json:"chat_external_id"`
+	ClientExternalID  string  `json:"client_external_id"`
+	MessageExternalID string  `json:"message_external_id"`
+	Content           Content `json:"content"`
+}
+
+type Content struct {
+	Text  string  `json:"text,omitempty"`
+	Media []Media `json:"media,omitempty"`
+}
+
+type Media struct {
+	Type    string `json:"type"`
+	URL     string `json:"url"`
+	AltText string `json:"alt"`
+	Base64  string `json:"base64,omitempty"`
+	Caption string `json:"caption,omitempty"`
 }
 
 //======================================================================
@@ -79,10 +92,10 @@ type TicketClosedEvent struct {
 
 // Message representa uma única mensagem, alinhada com a estrutura do servidor.
 type Message struct {
-	ID        Nanoid `json:"id,omitempty"`
-	From      From   `json:"from"`      // Objeto polimórfico para o remetente
-	Timestamp int64  `json:"timestamp"` // Unix timestamp em segundos
-	Content   string `json:"content"`
+	ID        Nanoid  `json:"id,omitempty"`
+	From      From    `json:"from"`      // Objeto polimórfico para o remetente
+	Timestamp int64   `json:"timestamp"` // Unix timestamp em segundos
+	Content   Content `json:"content"`
 }
 
 // From é uma estrutura especial para lidar com o remetente polimórfico (Client ou Employer).
